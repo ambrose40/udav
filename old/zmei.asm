@@ -534,19 +534,16 @@ jmp again4
 skip4:
 mov [ds:1928h],1002h
 another4:
-mov ah,01h
+mov ax,0100h
 int 16h
+mov bx,ax
+mov ax,0000h
+LAHF
+cmp ah,46h
 jz getto3
-mov al,ah
 mov ah,00h
 int 16h
-;mov bx,ax
-;mov ax,0000h
-;LAHF
-;mov al,[ds:1955h]
-;cmp ah,46h
-;jz getto3
-cmp ah,44h
+cmp ah,01h
 jnz proced
 jmp exit
 proced:
@@ -600,12 +597,6 @@ mov di,dx
 mov si,cx
 repet:
 int 1Ah
-;push ax
-;mov ah,01h
-;mov al,00h
-;int 16h
-;mov [ds:1955h],ah
-;pop ax
 cmp cx,si
 jae onemoprov
 jmp repet
