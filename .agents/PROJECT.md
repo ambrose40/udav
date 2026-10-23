@@ -16,9 +16,10 @@
 
 - `zmei.asm`: menu/level flow, bitmap I/O, rendering, movement, input, timing,
   game state, buffers, and private stack.
-- `README`: user-facing build instructions, controls, and architecture notes.
+- `README.md`: user-facing build instructions, controls, and architecture notes.
 - `BUILD.BAT`: DOS build using `TASM/TASM.EXE` and `TASM/TLINK.EXE`.
-- `dosbox_udav.conf`: windowed DOSBox configuration that builds and runs UDAV.
+- `LAUNCH.BAT`: interactive build/run/logs menu using DOSBox's built-in CHOICE.
+- `dosbox_udav.conf`: windowed DOSBox configuration that starts the menu.
 - `tests/test_game.py`: Python/Unicorn tests of the compiled machine code.
 - Root BMPs: intro, four levels, defeat, and victory artwork.
 - `old/` and existing archives: historical versions; preserve them.
@@ -33,10 +34,17 @@ Run from the repository root on Windows:
 .\DOSBOX\DOSBox.exe -conf dosbox_udav.conf
 ```
 
-The configuration mounts the working directory as DOS drive C:, calls
-`BUILD.BAT`, and runs `BUILD\ZMEI.COM` only if the build succeeded. The game
-opens its BMP assets relative to the current DOS directory, so launch it
-from the repository root, not from inside BUILD.
+The configuration mounts the working directory as DOS drive C: and calls
+`LAUNCH.BAT`. Options: 1 build and run, 2 build only, 3 run the existing
+build, 4 view build logs, 5 return to the DOS prompt. Build-and-run invokes
+`BUILD.BAT` and launches only on success; quitting the game returns to the
+menu. On real DOS the menu requires CHOICE; BUILD.BAT works independently.
+The game opens BMP assets relative to the current DOS directory, so launch
+it from the repository root, not from inside BUILD.
+
+For a DOSBox prompt without the menu, add `-noautoexec -c "mount c ." -c "c:"`
+to the launch command. README.md documents both BUILD.BAT and the individual
+assembler/linker commands, including their output paths and options.
 
 The build writes COM/OBJ/MAP/LST files and logs to ignored `BUILD/`.
 TASM's output arguments use directories (`ZMEI.ASM,BUILD\,BUILD\`); this
@@ -86,6 +94,9 @@ input, timer rollover, malformed/missing files, and menu/defeat/victory flow.
 BIOS/DOS services are stubbed in these tests. Level-flow tests place the
 final apple directly ahead of the snake to reach all screens quickly.
 A separate DOSBox smoke check passed using BIOS-queued F2, Space, Escape.
+The launcher was also checked in DOSBox with BIOS-queued keys through all
+five menu actions, including build-and-run and run-existing game sessions.
+The check confirmed all queued keys were consumed and UDAV_BUILT was 1.
 
 ## Git convention and workflow
 
