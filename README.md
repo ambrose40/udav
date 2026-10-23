@@ -169,7 +169,7 @@ screen quickly. Use DOSBox or real DOS for interactive gameplay checks.
 
 ## Contributing
 
-See [contribution.md](contribution.md) for bug reports, development conventions,
+See [CONTRIBUTION.md](CONTRIBUTION.md) for bug reports, development conventions,
 and pull request guidance.
 
 ## License
