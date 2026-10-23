@@ -2,6 +2,29 @@
 
 DOS snake game written in x86 assembly using Turbo Assembler and Turbo Link.
 The source uses 8086 instructions and fits in one `.COM` segment.
+Guide the snake through four bitmap-based levels, collecting food and avoiding
+walls and its own body. The game uses VGA mode 13h (320x200) and BIOS keyboard
+and timer services; the original was tested on a real 386, VMware, and DOSBox.
+
+## Project structure
+
+```text
+zmei.asm           Game source: rendering, movement, input, and level flow
+*.bmp              Level maps and intro/defeat/victory screens
+BUILD.BAT          Assemble and link with the bundled Borland tools
+LAUNCH.BAT         Interactive build/run/logs menu
+dosbox_udav.conf   DOSBox settings and launcher startup
+DOSBOX/            Bundled Windows DOSBox runtime and its documentation
+TASM/              Bundled assembler, linker, and supporting files
+BUILD/             Build outputs, logs, and DOSBox smoke-test helpers
+tests/             Python/Unicorn machine-code regression tests
+ZMEI.COM           Prebuilt release executable (OBJ/MAP/LST alongside it)
+UDAV-*.zip         Packaged releases
+old/               Earlier game version and artwork
+CONTRIBUTING.md    Contribution and testing guidelines
+LICENSE            MIT license for UDAV
+.agents/           Project memory and working notes
+```
 
 ## What's new in 1.2
 
