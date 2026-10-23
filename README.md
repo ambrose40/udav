@@ -166,3 +166,13 @@ rendering, food counts/effects, movement/collision, buffer bounds, keyboard
 rules, timer rollover, file errors, and the menu/defeat/victory flow. The
 level-flow checks place the final apple ahead of the snake to reach each
 screen quickly. Use DOSBox or real DOS for interactive gameplay checks.
+
+## Contributing
+
+See [contribution.md](contribution.md) for bug reports, development conventions,
+and pull request guidance.
+
+## License
+
+UDAV is licensed under the [MIT License](LICENSE). Bundled third-party tools,
+including DOSBox and TASM/TLINK, retain their respective licenses.
