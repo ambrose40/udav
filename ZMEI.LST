@@ -1,0 +1,807 @@
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 1
+ZMEI.ASM
+
+
+
+      1				     ; UDAV -- DOS .COM	snake game, TASM/MASM syntax (8086 instructions).
+      2				     ; Build: TASM /l ZMEI.ASM	 then	TLINK /t ZMEI.OBJ
+      3				     ;
+      4				     ; Mode 13h	has 320x200 pixels. Each game cell occupies 2x2	pixels,
+      5				     ; so positions are	packed as AH = cell row	(0..99), AL = column (0..159).
+      6				     ; The bitmap's palette indices are	also the game's	collision/food map.
+      7
+      8	0000			     .model tiny
+      9	0000			     .code
+     10				     org 100h
+     11
+     12	      =	00A0		     BOARD_COLUMNS	 equ 160
+     13	      =	0064		     BOARD_ROWS		 equ 100
+     14	      =	0140		     SCREEN_WIDTH	 equ 320
+     15	      =	A000		     VGA_SEGMENT	 equ 0A000h
+     16	      =	0436		     BITMAP_HEADER_SIZE	 equ 1078	; 14 + 40 bytes	+ 256 four-byte	colors
+     17	      =	3E80		     BITMAP_PIXEL_COUNT	 equ BOARD_COLUMNS * BOARD_ROWS
+     18	      =	42B6		     BITMAP_FILE_SIZE	 equ BITMAP_HEADER_SIZE	+ BITMAP_PIXEL_COUNT
+     19	      =	0400		     MAX_SNAKE_LENGTH	 equ 1024
+     20	      =	0002		     MIN_SNAKE_LENGTH	 equ 2
+     21	      =	0004		     INITIAL_LENGTH	 equ 4
+     22	      =	0004		     LAST_LEVEL		 equ 4
+     23
+     24	      =	0000		     COLOR_BACKGROUND	 equ 0
+     25	      =	0002		     COLOR_APPLE	 equ 2		; grow by one segment
+     26	      =	0003		     COLOR_SHRINK	 equ 3		; discard tail as a green apple
+     27	      =	0004		     COLOR_DOUBLE_APPLE	 equ 4		; grow by two segments
+     28	      =	000F		     COLOR_SOLID	 equ 15		; walls	and snake share	this color
+     29
+     30	      =	0001		     DIR_LEFT		 equ 1
+     31	      =	0002		     DIR_UP		 equ 2
+     32	      =	0003		     DIR_RIGHT		 equ 3
+     33	      =	0004		     DIR_DOWN		 equ 4
+     34	      =	0000		     STEP_ALIVE		 equ 0
+     35	      =	0001		     STEP_DEAD		 equ 1
+     36	      =	0002		     STEP_COMPLETE	 equ 2
+     37
+     38	      =	0001		     SCAN_ESCAPE	 equ 01h
+     39	      =	003B		     SCAN_F1		 equ 3Bh
+     40	      =	003C		     SCAN_F2		 equ 3Ch
+     41	      =	0044		     SCAN_F10		 equ 44h
+     42	      =	0048		     SCAN_UP		 equ 48h
+     43	      =	004B		     SCAN_LEFT		 equ 4Bh
+     44	      =	004D		     SCAN_RIGHT		 equ 4Dh
+     45	      =	0050		     SCAN_DOWN		 equ 50h
+     46
+     47	0100			     startup proc near
+     48					 ; Own the stack instead of repeatedly resetting SP inside game	routines.
+     49	0100  FA			 cli
+     50	0101  8C C8			 mov ax,cs
+     51	0103  8E D0			 mov ss,ax
+     52	0105  BC 520Dr			 mov sp,offset stack_top
+     53	0108  FB			 sti
+     54	0109  8E D8			 mov ds,ax
+     55	010B  FC			 cld
+     56
+     57	010C  B4 0F			 mov ah,0Fh
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 2
+ZMEI.ASM
+
+
+
+     58	010E  CD 10			 int 10h
+     59	0110  24 7F			 and al,7Fh
+     60	0112  A2 04BAr			 mov saved_video_mode,al
+     61	0115  B8 0013			 mov ax,0013h
+     62	0118  CD 10			 int 10h
+     63
+     64	011A			     main_menu:
+     65	011A  BA 04C8r			 mov dx,offset intro_filename
+     66	011D  E8 00E9			 call load_bitmap
+     67	0120  73 03			 jnc show_menu
+     68	0122  E9 0088			 jmp file_error
+     69	0125			     show_menu:
+     70	0125  E8 0169			 call draw_bitmap
+     71	0128  E8 00B1			 call choose_speed
+     72	012B  80 3E 04BBr 00		 cmp quit_requested,0
+     73	0130  74 03			 je start_game
+     74	0132  EB 71 90			 jmp quit_game
+     75	0135			     start_game:
+     76	0135  C6 06 04BCr 01 90		 mov current_level,1
+     77
+     78	013B			     start_level:
+     79	013B  E8 01D3			 call initialize_snake
+     80	013E  33 DB			 xor bx,bx
+     81	0140  8A 1E 04BCr		 mov bl,current_level
+     82	0144  4B			 dec bx
+     83	0145  D1 E3			 shl bx,1
+     84	0147  8B 97 0515r		 mov dx,level_filenames[bx]
+     85	014B  E8 00BB			 call load_bitmap
+     86	014E  73 03			 jnc show_level
+     87	0150  EB 5B 90			 jmp file_error
+     88	0153			     show_level:
+     89	0153  E8 013B			 call draw_bitmap
+     90					 ; Retain the original "press a	key to start this level" pause.
+     91	0156  32 E4			 xor ah,ah
+     92	0158  CD 16			 int 16h
+     93	015A  80 FC 01			 cmp ah,SCAN_ESCAPE
+     94	015D  74 46			 je quit_game
+     95	015F  80 FC 44			 cmp ah,SCAN_F10
+     96	0162  74 41			 je quit_game
+     97	0164  E8 01CF			 call draw_snake
+     98
+     99	0167			     game_loop:
+    100	0167  E8 0330			 call wait_for_move
+    101	016A  E8 01D9			 call read_direction
+    102	016D  80 3E 04BBr 00		 cmp quit_requested,0
+    103	0172  75 31			 jne quit_game
+    104	0174  E8 0218			 call advance_snake
+    105	0177  3C 01			 cmp al,STEP_DEAD
+    106	0179  74 15			 je game_lost
+    107	017B  3C 02			 cmp al,STEP_COMPLETE
+    108	017D  75 E8			 jne game_loop
+    109	017F  FE 06 04BCr		 inc current_level
+    110	0183  80 3E 04BCr 04		 cmp current_level,LAST_LEVEL
+    111	0188  76 B1			 jbe start_level
+    112
+    113	018A  BA 04DEr			 mov dx,offset victory_filename
+    114	018D  EB 04 90			 jmp show_result
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 3
+ZMEI.ASM
+
+
+
+    115	0190			     game_lost:
+    116	0190  BA 04D3r			 mov dx,offset defeat_filename
+    117	0193			     show_result:
+    118	0193  E8 0073			 call load_bitmap
+    119	0196  72 15			 jc file_error
+    120	0198  E8 00F6			 call draw_bitmap
+    121					 ; F1/F2 start another game; Escape/F10	leave from result screens too.
+    122	019B  E8 003E			 call choose_speed
+    123	019E  80 3E 04BBr 00		 cmp quit_requested,0
+    124	01A3  74 90			 je start_game
+    125	01A5			     quit_game:
+    126	01A5  E8 002C			 call restore_video_mode
+    127	01A8  B8 4C00			 mov ax,4C00h
+    128	01AB  CD 21			 int 21h
+    129
+    130	01AD			     file_error:
+    131	01AD  E8 0024			 call restore_video_mode
+    132	01B0  BA 051Dr			 mov dx,offset file_error_message
+    133	01B3  B4 09			 mov ah,09h
+    134	01B5  CD 21			 int 21h
+    135	01B7  8B 36 04C6r		 mov si,current_filename
+    136	01BB			     print_error_filename:
+    137	01BB  AC			 lodsb
+    138	01BC  0A C0			 or al,al
+    139	01BE  74 08			 jz finish_file_error
+    140	01C0  8A D0			 mov dl,al
+    141	01C2  B4 02			 mov ah,02h
+    142	01C4  CD 21			 int 21h
+    143	01C6  EB F3			 jmp print_error_filename
+    144	01C8			     finish_file_error:
+    145	01C8  BA 0554r			 mov dx,offset newline
+    146	01CB  B4 09			 mov ah,09h
+    147	01CD  CD 21			 int 21h
+    148	01CF  B8 4C01			 mov ax,4C01h
+    149	01D2  CD 21			 int 21h
+    150	01D4			     startup endp
+    151
+    152				     ; Restore the mode	active before launch, including	when an	asset cannot load.
+    153	01D4			     restore_video_mode	proc near
+    154	01D4  32 E4			 xor ah,ah
+    155	01D6  A0 04BAr			 mov al,saved_video_mode
+    156	01D9  CD 10			 int 10h
+    157	01DB  C3			 ret
+    158	01DC			     restore_video_mode	endp
+    159
+    160				     ; Blocking	menu input. F1 = two BIOS ticks/move; F2 = one tick/move.
+    161				     ; Other keys are ignored. Clobbers	AX; updates move_delay/quit_requested.
+    162	01DC			     choose_speed proc near
+    163	01DC			     choose_speed_key:
+    164	01DC  32 E4			 xor ah,ah
+    165	01DE  CD 16			 int 16h
+    166	01E0  80 FC 01			 cmp ah,SCAN_ESCAPE
+    167	01E3  74 1D			 je choose_quit
+    168	01E5  80 FC 44			 cmp ah,SCAN_F10
+    169	01E8  74 18			 je choose_quit
+    170	01EA  80 FC 3B			 cmp ah,SCAN_F1
+    171	01ED  74 0C			 je choose_slow
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 4
+ZMEI.ASM
+
+
+
+    172	01EF  80 FC 3C			 cmp ah,SCAN_F2
+    173	01F2  75 E8			 jne choose_speed_key
+    174	01F4  C7 06 04BEr 0001		 mov move_delay,1
+    175	01FA  C3			 ret
+    176	01FB			     choose_slow:
+    177	01FB  C7 06 04BEr 0002		 mov move_delay,2
+    178	0201  C3			 ret
+    179	0202			     choose_quit:
+    180	0202  C6 06 04BBr 01 90		 mov quit_requested,1
+    181	0208  C3			 ret
+    182	0209			     choose_speed endp
+    183
+    184				     ; Load one	of the supplied	160x100, uncompressed, 8-bit BMPs.
+    185				     ; In: DS:DX = ASCIIZ filename. Out: CF set	on open/read/format failure.
+    186				     ; Clobbers	AX/BX/CX/DX/SI.	Always closes an opened	handle.
+    187				     ; The artwork deliberately	uses file-row order as screen-row order, just as
+    188				     ; the original game did; do not reverse the usual bottom-up BMP scanlines.
+    189	0209			     load_bitmap proc near
+    190	0209  89 16 04C6r		 mov current_filename,dx
+    191	020D  B8 3D00			 mov ax,3D00h
+    192	0210  CD 21			 int 21h
+    193	0212  72 7C			 jc bitmap_open_failed
+    194	0214  8B D8			 mov bx,ax
+    195	0216  BA 0D57r			 mov dx,offset bitmap_buffer
+    196	0219  B9 42B6			 mov cx,BITMAP_FILE_SIZE
+    197	021C  B4 3F			 mov ah,3Fh
+    198	021E  CD 21			 int 21h
+    199					 ; Preserve both the read result and carry across DOS close.
+    200	0220  9C			 pushf
+    201	0221  50			 push ax
+    202	0222  B4 3E			 mov ah,3Eh
+    203	0224  CD 21			 int 21h
+    204	0226  58			 pop ax
+    205	0227  9D			 popf
+    206	0228  72 66			 jc bitmap_open_failed
+    207	022A  3D 42B6			 cmp ax,BITMAP_FILE_SIZE
+    208	022D  75 60			 jne bitmap_invalid
+    209	022F  81 3E 0D57r 4D42		 cmp word ptr bitmap_buffer[0],4D42h ; "BM"
+    210	0235  75 58			 jne bitmap_invalid
+    211	0237  81 3E 0D61r 0436		 cmp word ptr bitmap_buffer[10],BITMAP_HEADER_SIZE
+    212	023D  75 50			 jne bitmap_invalid
+    213	023F  83 3E 0D63r 00		 cmp word ptr bitmap_buffer[12],0
+    214	0244  75 49			 jne bitmap_invalid
+    215	0246  83 3E 0D65r 28		 cmp word ptr bitmap_buffer[14],40
+    216	024B  75 42			 jne bitmap_invalid
+    217	024D  83 3E 0D67r 00		 cmp word ptr bitmap_buffer[16],0
+    218	0252  75 3B			 jne bitmap_invalid
+    219	0254  81 3E 0D69r 00A0		 cmp word ptr bitmap_buffer[18],BOARD_COLUMNS
+    220	025A  75 33			 jne bitmap_invalid
+    221	025C  83 3E 0D6Br 00		 cmp word ptr bitmap_buffer[20],0
+    222	0261  75 2C			 jne bitmap_invalid
+    223	0263  83 3E 0D6Dr 64		 cmp word ptr bitmap_buffer[22],BOARD_ROWS
+    224	0268  75 25			 jne bitmap_invalid
+    225	026A  83 3E 0D6Fr 00		 cmp word ptr bitmap_buffer[24],0
+    226	026F  75 1E			 jne bitmap_invalid
+    227	0271  83 3E 0D71r 01		 cmp word ptr bitmap_buffer[26],1  ; planes
+    228	0276  75 17			 jne bitmap_invalid
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 5
+ZMEI.ASM
+
+
+
+    229	0278  83 3E 0D73r 08		 cmp word ptr bitmap_buffer[28],8  ; bits/pixel
+    230	027D  75 10			 jne bitmap_invalid
+    231	027F  83 3E 0D75r 00		 cmp word ptr bitmap_buffer[30],0  ; BI_RGB (no	compression)
+    232	0284  75 09			 jne bitmap_invalid
+    233	0286  83 3E 0D77r 00		 cmp word ptr bitmap_buffer[32],0
+    234	028B  75 02			 jne bitmap_invalid
+    235	028D  F8			 clc
+    236	028E  C3			 ret
+    237	028F			     bitmap_invalid:
+    238	028F  F9			 stc
+    239	0290			     bitmap_open_failed:
+    240	0290  C3			 ret
+    241	0291			     load_bitmap endp
+    242
+    243				     ; Draw the	bitmap as 2x2 cells and	count its food cells afresh.
+    244				     ; Uses the	standard mode-13h palette, matching the	original game.
+    245				     ; Clobbers	AX/BX/DX/SI. draw_cell preserves the source pointer and	position.
+    246	0291			     draw_bitmap proc near
+    247	0291  C7 06 04C2r 0000		 mov food_remaining,0
+    248	0297  BE 118Dr			 mov si,offset bitmap_buffer + BITMAP_HEADER_SIZE
+    249	029A  33 DB			 xor bx,bx			 ; BH =	row, BL	= column
+    250	029C			     draw_bitmap_cell:
+    251	029C  8A 14			 mov dl,[si]
+    252	029E  80 FA 02			 cmp dl,COLOR_APPLE
+    253	02A1  72 09			 jb bitmap_cell_counted
+    254	02A3  80 FA 04			 cmp dl,COLOR_DOUBLE_APPLE
+    255	02A6  77 04			 ja bitmap_cell_counted
+    256	02A8  FF 06 04C2r		 inc food_remaining
+    257	02AC			     bitmap_cell_counted:
+    258	02AC  8B C3			 mov ax,bx
+    259	02AE  E8 002C			 call draw_cell
+    260	02B1  46			 inc si
+    261	02B2  FE C3			 inc bl
+    262	02B4  80 FB A0			 cmp bl,BOARD_COLUMNS
+    263	02B7  72 E3			 jb draw_bitmap_cell
+    264	02B9  32 DB			 xor bl,bl
+    265	02BB  FE C7			 inc bh
+    266	02BD  80 FF 64			 cmp bh,BOARD_ROWS
+    267	02C0  72 DA			 jb draw_bitmap_cell
+    268	02C2  C3			 ret
+    269	02C3			     draw_bitmap endp
+    270
+    271				     ; In: AX =	packed cell position. Out: DI =	top-left VGA byte offset.
+    272				     ; Preserves all other registers. Cell coordinates keep columns 128..159
+    273				     ; representable (their pixel coordinates exceed the old byte-sized	x).
+    274	02C3			     cell_video_offset proc near
+    275	02C3  50			 push ax
+    276	02C4  53			 push bx
+    277	02C5  52			 push dx
+    278	02C6  33 DB			 xor bx,bx
+    279	02C8  8A D8			 mov bl,al
+    280	02CA  D1 E3			 shl bx,1
+    281	02CC  8A C4			 mov al,ah
+    282	02CE  32 E4			 xor ah,ah
+    283	02D0  BF 0280			 mov di,SCREEN_WIDTH * 2
+    284	02D3  F7 E7			 mul di
+    285	02D5  03 C3			 add ax,bx
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 6
+ZMEI.ASM
+
+
+
+    286	02D7  8B F8			 mov di,ax
+    287	02D9  5A			 pop dx
+    288	02DA  5B			 pop bx
+    289	02DB  58			 pop ax
+    290	02DC  C3			 ret
+    291	02DD			     cell_video_offset endp
+    292
+    293				     ; In: AX =	packed cell, DL	= color. Preserves all registers, including ES.
+    294	02DD			     draw_cell proc near
+    295	02DD  50			 push ax
+    296	02DE  57			 push di
+    297	02DF  06			 push es
+    298	02E0  E8 FFE0			 call cell_video_offset
+    299	02E3  B8 A000			 mov ax,VGA_SEGMENT
+    300	02E6  8E C0			 mov es,ax
+    301	02E8  8A C2			 mov al,dl
+    302	02EA  26: 88 05			 mov es:[di],al
+    303	02ED  26: 88 45	01		 mov es:[di+1],al
+    304	02F1  26: 88 85	0140		 mov es:[di+SCREEN_WIDTH],al
+    305	02F6  26: 88 85	0141		 mov es:[di+SCREEN_WIDTH+1],al
+    306	02FB  07			 pop es
+    307	02FC  5F			 pop di
+    308	02FD  58			 pop ax
+    309	02FE  C3			 ret
+    310	02FF			     draw_cell endp
+    311
+    312				     ; In: AX =	packed cell. Out: AL = color; preserves	all other registers.
+    313	02FF			     read_cell proc near
+    314	02FF  57			 push di
+    315	0300  06			 push es
+    316	0301  E8 FFBF			 call cell_video_offset
+    317	0304  50			 push ax
+    318	0305  B8 A000			 mov ax,VGA_SEGMENT
+    319	0308  8E C0			 mov es,ax
+    320	030A  58			 pop ax
+    321	030B  26: 8A 05			 mov al,es:[di]
+    322	030E  07			 pop es
+    323	030F  5F			 pop di
+    324	0310  C3			 ret
+    325	0311			     read_cell endp
+    326
+    327				     ; Initialize the original four-cell snake at pixel	(128,128), facing left.
+    328				     ; Positions after snake_length are	never read without first being filled.
+    329	0311			     initialize_snake proc near
+    330	0311  C7 06 04C0r 0004		 mov snake_length,INITIAL_LENGTH
+    331	0317  C6 06 04BDr 01 90		 mov snake_direction,DIR_LEFT
+    332	031D  C7 06 0557r 4040		 mov word ptr snake_cells[0],4040h
+    333	0323  C7 06 0559r 4041		 mov word ptr snake_cells[2],4041h
+    334	0329  C7 06 055Br 4042		 mov word ptr snake_cells[4],4042h
+    335	032F  C7 06 055Dr 4043		 mov word ptr snake_cells[6],4043h
+    336	0335  C3			 ret
+    337	0336			     initialize_snake endp
+    338
+    339				     ; Draw the	complete snake once when entering a level. Clobbers AX/CX/DX/SI.
+    340	0336			     draw_snake	proc near
+    341	0336  BE 0557r			 mov si,offset snake_cells
+    342	0339  8B 0E 04C0r		 mov cx,snake_length
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 7
+ZMEI.ASM
+
+
+
+    343	033D  B2 0F			 mov dl,COLOR_SOLID
+    344	033F			     draw_snake_cell:
+    345	033F  AD			 lodsw
+    346	0340  E8 FF9A			 call draw_cell
+    347	0343  E2 FA			 loop draw_snake_cell
+    348	0345  C3			 ret
+    349	0346			     draw_snake	endp
+    350
+    351				     ; Consume at most one key per move	so queued turns	cannot reverse the snake
+    352				     ; before it moves.	In particular, an immediate 180-degree turn is ignored.
+    353				     ; Clobbers	AX/BX. Escape and the original F10 binding both	quit.
+    354	0346			     read_direction proc near
+    355	0346  B4 01			 mov ah,01h
+    356	0348  CD 16			 int 16h
+    357	034A  74 3B			 jz direction_done
+    358	034C  32 E4			 xor ah,ah
+    359	034E  CD 16			 int 16h
+    360	0350  80 FC 01			 cmp ah,SCAN_ESCAPE
+    361	0353  74 33			 je direction_quit
+    362	0355  80 FC 44			 cmp ah,SCAN_F10
+    363	0358  74 2E			 je direction_quit
+    364	035A  B3 01			 mov bl,DIR_LEFT
+    365	035C  80 FC 4B			 cmp ah,SCAN_LEFT
+    366	035F  74 15			 je direction_candidate
+    367	0361  B3 02			 mov bl,DIR_UP
+    368	0363  80 FC 48			 cmp ah,SCAN_UP
+    369	0366  74 0E			 je direction_candidate
+    370	0368  B3 03			 mov bl,DIR_RIGHT
+    371	036A  80 FC 4D			 cmp ah,SCAN_RIGHT
+    372	036D  74 07			 je direction_candidate
+    373	036F  B3 04			 mov bl,DIR_DOWN
+    374	0371  80 FC 50			 cmp ah,SCAN_DOWN
+    375	0374  75 11			 jne direction_done
+    376	0376			     direction_candidate:
+    377	0376  A0 04BDr			 mov al,snake_direction
+    378	0379  2A C3			 sub al,bl
+    379	037B  3C 02			 cmp al,2
+    380	037D  74 08			 je direction_done
+    381	037F  3C FE			 cmp al,-2
+    382	0381  74 04			 je direction_done
+    383	0383  88 1E 04BDr		 mov snake_direction,bl
+    384	0387			     direction_done:
+    385	0387  C3			 ret
+    386	0388			     direction_quit:
+    387	0388  C6 06 04BBr 01 90		 mov quit_requested,1
+    388	038E  C3			 ret
+    389	038F			     read_direction endp
+    390
+    391				     ; Advance one cell, handle	food, shift the	body, and update changed cells.
+    392				     ; Out: AL = STEP_ALIVE / STEP_DEAD	/ STEP_COMPLETE. Clobbers general regs.
+    393				     ; The VGA screen remains the collision map, as in the original game.
+    394	038F			     advance_snake proc	near
+    395	038F  A1 0557r			 mov ax,snake_cells[0]
+    396	0392  80 3E 04BDr 01		 cmp snake_direction,DIR_LEFT
+    397	0397  75 09			 jne move_up_test
+    398	0399  0A C0			 or al,al
+    399	039B  74 4C			 jz move_dead
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 8
+ZMEI.ASM
+
+
+
+    400	039D  FE C8			 dec al
+    401	039F  EB 28 90			 jmp next_head_ready
+    402	03A2			     move_up_test:
+    403	03A2  80 3E 04BDr 02		 cmp snake_direction,DIR_UP
+    404	03A7  75 09			 jne move_right_test
+    405	03A9  0A E4			 or ah,ah
+    406	03AB  74 3C			 jz move_dead
+    407	03AD  FE CC			 dec ah
+    408	03AF  EB 18 90			 jmp next_head_ready
+    409	03B2			     move_right_test:
+    410	03B2  80 3E 04BDr 03		 cmp snake_direction,DIR_RIGHT
+    411	03B7  75 09			 jne move_down
+    412	03B9  FE C0			 inc al
+    413	03BB  3C A0			 cmp al,BOARD_COLUMNS
+    414	03BD  73 2A			 jae move_dead
+    415	03BF  EB 08 90			 jmp next_head_ready
+    416	03C2			     move_down:
+    417	03C2  FE C4			 inc ah
+    418	03C4  80 FC 64			 cmp ah,BOARD_ROWS
+    419	03C7  73 20			 jae move_dead
+    420	03C9			     next_head_ready:
+    421	03C9  A3 04C4r			 mov next_head,ax
+    422	03CC  E8 FF30			 call read_cell
+    423	03CF  3C 0F			 cmp al,COLOR_SOLID
+    424	03D1  74 16			 je move_dead
+    425	03D3  8B 0E 04C0r		 mov cx,snake_length
+    426	03D7  3C 02			 cmp al,COLOR_APPLE
+    427	03D9  74 12			 je eat_apple
+    428	03DB  3C 04			 cmp al,COLOR_DOUBLE_APPLE
+    429	03DD  74 0D			 je eat_double_apple
+    430	03DF  3C 03			 cmp al,COLOR_SHRINK
+    431	03E1  74 3E			 je eat_shrink
+    432
+    433					 ; No growth: erase the	tail before shifting it	out of the body.
+    434	03E3  E8 009D			 call erase_tail
+    435	03E6  EB 69 90			 jmp shift_body
+    436	03E9			     move_dead:
+    437	03E9  B0 01			 mov al,STEP_DEAD
+    438	03EB  C3			 ret
+    439
+    440	03EC			     eat_double_apple:
+    441	03EC  41			 inc cx
+    442	03ED			     eat_apple:
+    443	03ED  41			 inc cx
+    444	03EE  81 F9 0400		 cmp cx,MAX_SNAKE_LENGTH
+    445	03F2  76 03			 jbe growth_bounded
+    446	03F4  B9 0400			 mov cx,MAX_SNAKE_LENGTH
+    447	03F7			     growth_bounded:
+    448	03F7  FF 0E 04C2r		 dec food_remaining
+    449					 ; Fill	any extra slots	with the old tail. A two-cell growth keeps one
+    450					 ; duplicate tail position for a move, then unfolds naturally.
+    451	03FB  8B 1E 04C0r		 mov bx,snake_length
+    452	03FF  4B			 dec bx
+    453	0400  D1 E3			 shl bx,1
+    454	0402  8B 87 0557r		 mov ax,snake_cells[bx]
+    455	0406  8B D1			 mov dx,cx
+    456	0408  2B 16 04C0r		 sub dx,snake_length
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 9
+ZMEI.ASM
+
+
+
+    457	040C  74 0D			 jz growth_at_capacity
+    458	040E			     fill_growth:
+    459	040E  83 C3 02			 add bx,2
+    460	0411  89 87 0557r		 mov snake_cells[bx],ax
+    461	0415  4A			 dec dx
+    462	0416  75 F6			 jnz fill_growth
+    463	0418  EB 37 90			 jmp shift_body
+    464	041B			     growth_at_capacity:
+    465					 ; A capped snake still	moves normally and consumes the	food.
+    466	041B  E8 0065			 call erase_tail
+    467	041E  EB 31 90			 jmp shift_body
+    468
+    469	0421			     eat_shrink:
+    470	0421  83 F9 02			 cmp cx,MIN_SNAKE_LENGTH
+    471	0424  76 24			 jbe shrink_at_minimum
+    472					 ; Preserve the	original castor-oil mechanic: the discarded last cell
+    473					 ; becomes green food. One item	eaten +	one spawned = unchanged	count.
+    474	0426  8B D9			 mov bx,cx
+    475	0428  4B			 dec bx
+    476	0429  D1 E3			 shl bx,1
+    477	042B  8B 87 0557r		 mov ax,snake_cells[bx]
+    478	042F  B2 02			 mov dl,COLOR_APPLE
+    479	0431  E8 FEA9			 call draw_cell
+    480	0434  49			 dec cx
+    481	0435  83 EB 02			 sub bx,2
+    482	0438  3B 87 0557r		 cmp ax,snake_cells[bx]
+    483	043C  74 13			 je shift_body			; double growth	may have duplicated tail
+    484	043E  8B 87 0557r		 mov ax,snake_cells[bx]
+    485	0442  B2 00			 mov dl,COLOR_BACKGROUND
+    486	0444  E8 FE96			 call draw_cell
+    487	0447  EB 08 90			 jmp shift_body
+    488	044A			     shrink_at_minimum:
+    489					 ; Consume the item without shrinking below a playable two-cell	body.
+    490	044A  FF 0E 04C2r		 dec food_remaining
+    491	044E  E8 0032			 call erase_tail
+    492
+    493	0451			     shift_body:
+    494	0451  89 0E 04C0r		 mov snake_length,cx
+    495					 ; Copy	backwards because the source and destination overlap.
+    496	0455  49			 dec cx
+    497	0456  8B D9			 mov bx,cx
+    498	0458  D1 E3			 shl bx,1
+    499	045A  BE 0557r			 mov si,offset snake_cells
+    500	045D  03 F3			 add si,bx
+    501	045F  8B FE			 mov di,si
+    502	0461  83 EE 02			 sub si,2
+    503	0464  06			 push es
+    504	0465  1E			 push ds
+    505	0466  07			 pop es
+    506	0467  FD			 std
+    507	0468  F3> A5			 rep movsw
+    508	046A  FC			 cld
+    509	046B  07			 pop es
+    510	046C  A1 04C4r			 mov ax,next_head
+    511	046F  A3 0557r			 mov snake_cells[0],ax
+    512	0472  B2 0F			 mov dl,COLOR_SOLID
+    513	0474  E8 FE66			 call draw_cell
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 10
+ZMEI.ASM
+
+
+
+    514	0477  B0 00			 mov al,STEP_ALIVE
+    515	0479  83 3E 04C2r 00		 cmp food_remaining,0
+    516	047E  75 02			 jne advance_done
+    517	0480  B0 02			 mov al,STEP_COMPLETE
+    518	0482			     advance_done:
+    519	0482  C3			 ret
+    520	0483			     advance_snake endp
+    521
+    522				     ; Erase the current tail. CX (the requested new length) is	preserved.
+    523				     ; Clobbers	AX/BX/DX. With double growth the last two entries may overlap;
+    524				     ; do not erase a cell that	the penultimate	segment	still occupies.
+    525	0483			     erase_tail	proc near
+    526	0483  8B 1E 04C0r		 mov bx,snake_length
+    527	0487  4B			 dec bx
+    528	0488  D1 E3			 shl bx,1
+    529	048A  8B 87 0557r		 mov ax,snake_cells[bx]
+    530	048E  3B 87 0555r		 cmp ax,snake_cells[bx-2]
+    531	0492  74 05			 je tail_erased
+    532	0494  B2 00			 mov dl,COLOR_BACKGROUND
+    533	0496  E8 FE44			 call draw_cell
+    534	0499			     tail_erased:
+    535	0499  C3			 ret
+    536	049A			     erase_tail	endp
+    537
+    538				     ; Wait for	one or two BIOS	timer transitions (~18.2 ticks/second).
+    539				     ; Comparing successive ticks rather than a	target timestamp handles both
+    540				     ; the low-word wrap and the BIOS midnight reset. AH is set	on EVERY call.
+    541				     ; Clobbers	AX/BX/CX/DX/SI/DI.
+    542	049A			     wait_for_move proc	near
+    543	049A  8B 1E 04BEr		 mov bx,move_delay
+    544	049E  32 E4			 xor ah,ah
+    545	04A0  CD 1A			 int 1Ah
+    546	04A2  8B F1			 mov si,cx
+    547	04A4  8B FA			 mov di,dx
+    548	04A6			     wait_next_tick:
+    549	04A6  32 E4			 xor ah,ah
+    550	04A8  CD 1A			 int 1Ah
+    551	04AA  3B CE			 cmp cx,si
+    552	04AC  75 04			 jne timer_changed
+    553	04AE  3B D7			 cmp dx,di
+    554	04B0  74 F4			 je wait_next_tick
+    555	04B2			     timer_changed:
+    556	04B2  8B F1			 mov si,cx
+    557	04B4  8B FA			 mov di,dx
+    558	04B6  4B			 dec bx
+    559	04B7  75 ED			 jnz wait_next_tick
+    560	04B9  C3			 ret
+    561	04BA			     wait_for_move endp
+    562
+    563				     ; All game	state is owned by labels, not absolute DS offsets.
+    564	04BA  03		     saved_video_mode db 3
+    565	04BB  00		     quit_requested   db 0
+    566	04BC  01		     current_level    db 1
+    567	04BD  01		     snake_direction  db DIR_LEFT
+    568	04BE  0002		     move_delay	      dw 2
+    569	04C0  0004		     snake_length     dw INITIAL_LENGTH
+    570	04C2  0000		     food_remaining   dw 0
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 11
+ZMEI.ASM
+
+
+
+    571	04C4  0000		     next_head	      dw 0
+    572	04C6  0000		     current_filename dw 0
+    573
+    574	04C8  69 6E 74 72 6F 30	2E+  intro_filename   db 'intro0.bmp',0
+    575	      62 6D 70 00
+    576	04D3  6C 6F 73 65 7A 7A	2E+  defeat_filename  db 'losezz.bmp',0
+    577	      62 6D 70 00
+    578	04DE  76 69 63 74 6F 72	2E+  victory_filename db 'victor.bmp',0
+    579	      62 6D 70 00
+    580	04E9  6C 65 76 65 6C 31	2E+  level1_filename  db 'level1.bmp',0
+    581	      62 6D 70 00
+    582	04F4  6C 65 76 65 6C 32	2E+  level2_filename  db 'level2.bmp',0
+    583	      62 6D 70 00
+    584	04FF  6C 65 76 65 6C 33	2E+  level3_filename  db 'level3.bmp',0
+    585	      62 6D 70 00
+    586	050A  6C 65 76 65 6C 34	2E+  level4_filename  db 'level4.bmp',0
+    587	      62 6D 70 00
+    588	0515  04E9r 04F4r	     level_filenames  dw offset	level1_filename, offset	level2_filename
+    589	0519  04FFr 050Ar			      dw offset	level3_filename, offset	level4_filename
+    590	051D  43 61 6E 6E 6F 74	20+  file_error_message	db 'Cannot read	a 160x100 uncompressed 8-bit game bitmap: $'
+    591	      72 65 61 64 20 61	20+
+    592	      31 36 30 78 31 30	30+
+    593	      20 75 6E 63 6F 6D	70+
+    594	      72 65 73 73 65 64	20+
+    595	      38 2D 62 69 74 20	67+
+    596	      61 6D 65 20 62 69	74+
+    597	      6D 61 70 3A 20 24
+    598	0554  0D 0A 24		     newline	      db 13,10,'$'
+    599
+    600				     ; Keep buffers and	a private stack	inside the single .COM segment.	Their
+    601				     ; combined	size leaves ample space	below DOS's 64 KiB segment limit.
+    602	0557  0400*(0000)	     snake_cells      dw MAX_SNAKE_LENGTH dup (0)
+    603	0D57  42B6*(00)		     bitmap_buffer    db BITMAP_FILE_SIZE dup (0)
+    604	500D  0200*(00)				      db 512 dup (0)
+    605	520D			     stack_top label word
+    606
+    607				     end startup
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 12
+Symbol Table
+
+
+
+
+Symbol Name			  Type	 Value
+
+??DATE				  Text	 "10/23/26"
+??FILENAME			  Text	 "ZMEI	  "
+??TIME				  Text	 "18:31:41"
+??VERSION			  Number 0205
+@CODE				  Text	 DGROUP
+@CODESIZE			  Text	 0
+@CPU				  Text	 0101H
+@CURSEG				  Text	 _TEXT
+@DATA				  Text	 DGROUP
+@DATASIZE			  Text	 0
+@FILENAME			  Text	 ZMEI
+@MODEL				  Text	 1
+@WORDSIZE			  Text	 2
+ADVANCE_DONE			  Near	 DGROUP:0482
+ADVANCE_SNAKE			  Near	 DGROUP:038F
+BITMAP_BUFFER			  Byte	 DGROUP:0D57
+BITMAP_CELL_COUNTED		  Near	 DGROUP:02AC
+BITMAP_FILE_SIZE		  Number 42B6
+BITMAP_HEADER_SIZE		  Number 0436
+BITMAP_INVALID			  Near	 DGROUP:028F
+BITMAP_OPEN_FAILED		  Near	 DGROUP:0290
+BITMAP_PIXEL_COUNT		  Number 3E80
+BOARD_COLUMNS			  Number 00A0
+BOARD_ROWS			  Number 0064
+CELL_VIDEO_OFFSET		  Near	 DGROUP:02C3
+CHOOSE_QUIT			  Near	 DGROUP:0202
+CHOOSE_SLOW			  Near	 DGROUP:01FB
+CHOOSE_SPEED			  Near	 DGROUP:01DC
+CHOOSE_SPEED_KEY		  Near	 DGROUP:01DC
+COLOR_APPLE			  Number 0002
+COLOR_BACKGROUND		  Number 0000
+COLOR_DOUBLE_APPLE		  Number 0004
+COLOR_SHRINK			  Number 0003
+COLOR_SOLID			  Number 000F
+CURRENT_FILENAME		  Word	 DGROUP:04C6
+CURRENT_LEVEL			  Byte	 DGROUP:04BC
+DEFEAT_FILENAME			  Byte	 DGROUP:04D3
+DIRECTION_CANDIDATE		  Near	 DGROUP:0376
+DIRECTION_DONE			  Near	 DGROUP:0387
+DIRECTION_QUIT			  Near	 DGROUP:0388
+DIR_DOWN			  Number 0004
+DIR_LEFT			  Number 0001
+DIR_RIGHT			  Number 0003
+DIR_UP				  Number 0002
+DRAW_BITMAP			  Near	 DGROUP:0291
+DRAW_BITMAP_CELL		  Near	 DGROUP:029C
+DRAW_CELL			  Near	 DGROUP:02DD
+DRAW_SNAKE			  Near	 DGROUP:0336
+DRAW_SNAKE_CELL			  Near	 DGROUP:033F
+EAT_APPLE			  Near	 DGROUP:03ED
+EAT_DOUBLE_APPLE		  Near	 DGROUP:03EC
+EAT_SHRINK			  Near	 DGROUP:0421
+ERASE_TAIL			  Near	 DGROUP:0483
+FILE_ERROR			  Near	 DGROUP:01AD
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 13
+Symbol Table
+
+
+
+FILE_ERROR_MESSAGE		  Byte	 DGROUP:051D
+FILL_GROWTH			  Near	 DGROUP:040E
+FINISH_FILE_ERROR		  Near	 DGROUP:01C8
+FOOD_REMAINING			  Word	 DGROUP:04C2
+GAME_LOOP			  Near	 DGROUP:0167
+GAME_LOST			  Near	 DGROUP:0190
+GROWTH_AT_CAPACITY		  Near	 DGROUP:041B
+GROWTH_BOUNDED			  Near	 DGROUP:03F7
+INITIALIZE_SNAKE		  Near	 DGROUP:0311
+INITIAL_LENGTH			  Number 0004
+INTRO_FILENAME			  Byte	 DGROUP:04C8
+LAST_LEVEL			  Number 0004
+LEVEL1_FILENAME			  Byte	 DGROUP:04E9
+LEVEL2_FILENAME			  Byte	 DGROUP:04F4
+LEVEL3_FILENAME			  Byte	 DGROUP:04FF
+LEVEL4_FILENAME			  Byte	 DGROUP:050A
+LEVEL_FILENAMES			  Word	 DGROUP:0515
+LOAD_BITMAP			  Near	 DGROUP:0209
+MAIN_MENU			  Near	 DGROUP:011A
+MAX_SNAKE_LENGTH		  Number 0400
+MIN_SNAKE_LENGTH		  Number 0002
+MOVE_DEAD			  Near	 DGROUP:03E9
+MOVE_DELAY			  Word	 DGROUP:04BE
+MOVE_DOWN			  Near	 DGROUP:03C2
+MOVE_RIGHT_TEST			  Near	 DGROUP:03B2
+MOVE_UP_TEST			  Near	 DGROUP:03A2
+NEWLINE				  Byte	 DGROUP:0554
+NEXT_HEAD			  Word	 DGROUP:04C4
+NEXT_HEAD_READY			  Near	 DGROUP:03C9
+PRINT_ERROR_FILENAME		  Near	 DGROUP:01BB
+QUIT_GAME			  Near	 DGROUP:01A5
+QUIT_REQUESTED			  Byte	 DGROUP:04BB
+READ_CELL			  Near	 DGROUP:02FF
+READ_DIRECTION			  Near	 DGROUP:0346
+RESTORE_VIDEO_MODE		  Near	 DGROUP:01D4
+SAVED_VIDEO_MODE		  Byte	 DGROUP:04BA
+SCAN_DOWN			  Number 0050
+SCAN_ESCAPE			  Number 0001
+SCAN_F1				  Number 003B
+SCAN_F10			  Number 0044
+SCAN_F2				  Number 003C
+SCAN_LEFT			  Number 004B
+SCAN_RIGHT			  Number 004D
+SCAN_UP				  Number 0048
+SCREEN_WIDTH			  Number 0140
+SHIFT_BODY			  Near	 DGROUP:0451
+SHOW_LEVEL			  Near	 DGROUP:0153
+SHOW_MENU			  Near	 DGROUP:0125
+SHOW_RESULT			  Near	 DGROUP:0193
+SHRINK_AT_MINIMUM		  Near	 DGROUP:044A
+SNAKE_CELLS			  Word	 DGROUP:0557
+SNAKE_DIRECTION			  Byte	 DGROUP:04BD
+SNAKE_LENGTH			  Word	 DGROUP:04C0
+STACK_TOP			  Word	 DGROUP:520D
+STARTUP				  Near	 DGROUP:0100
+START_GAME			  Near	 DGROUP:0135
+START_LEVEL			  Near	 DGROUP:013B
+Turbo Assembler	 Version 2.5	    10/23/26 18:31:41	    Page 14
+Symbol Table
+
+
+
+STEP_ALIVE			  Number 0000
+STEP_COMPLETE			  Number 0002
+STEP_DEAD			  Number 0001
+TAIL_ERASED			  Near	 DGROUP:0499
+TIMER_CHANGED			  Near	 DGROUP:04B2
+VGA_SEGMENT			  Number A000
+VICTORY_FILENAME		  Byte	 DGROUP:04DE
+WAIT_FOR_MOVE			  Near	 DGROUP:049A
+WAIT_NEXT_TICK			  Near	 DGROUP:04A6
+
+Groups & Segments		  Bit Size Align  Combine Class
+
+DGROUP				  Group
+  _DATA				  16  0000 Word	  Public  DATA
+  _TEXT				  16  520D Word	  Public  CODE
+
