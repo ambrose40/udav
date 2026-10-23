@@ -6,6 +6,22 @@ Guide the snake through four bitmap-based levels, collecting food and avoiding
 walls and its own body. The game uses VGA mode 13h (320x200) and BIOS keyboard
 and timer services; the original was tested on a real 386, VMware, and DOSBox.
 
+## Table of contents
+
+- [Project structure](#project-structure)
+- [What's new in 1.2](#whats-new-in-12)
+- [Build and run with the DOSBox menu](#build-and-run-with-the-dosbox-menu)
+  - [Run the release on DOS](#run-the-release-on-dos)
+- [Compile and link manually](#compile-and-link-manually)
+  - [Option A: use the build script](#option-a-use-the-build-script)
+  - [Option B: invoke the assembler and linker directly](#option-b-invoke-the-assembler-and-linker-directly)
+  - [Build output and troubleshooting](#build-output-and-troubleshooting)
+- [Controls and rules](#controls-and-rules)
+- [Source layout](#source-layout)
+- [Machine-code regression checks](#machine-code-regression-checks-optional-on-the-host)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Project structure
 
 ```text
