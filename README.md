@@ -1,7 +1,19 @@
-# Snake UDAV 1.1
+# Snake UDAV 1.2
 
 DOS snake game written in x86 assembly using Turbo Assembler and Turbo Link.
 The source uses 8086 instructions and fits in one `.COM` segment.
+
+## What's new in 1.2
+
+- Clearer assembly with named state, documented procedures, and shared
+  movement/rendering routines.
+- Fixes for coordinate wrapping, snake growth/shrink limits, overlapping
+  tails, bitmap-loading errors, timer rollover, and victory/exit behavior.
+- An interactive DOSBox launcher with build, run, and build-log options.
+- Bundled DOSBox and TASM/TLINK tools, updated game binaries, and the
+  [UDAV-1_2.zip](UDAV-1_2.zip) release archive.
+- 14 machine-code regression tests covering rendering, gameplay, error
+  handling, and level flow; the build and launcher were also checked in DOSBox.
 
 ## Build and run with the DOSBox menu
 
@@ -22,9 +34,20 @@ From **the repository root**, run this in Windows PowerShell:
 | 4 | Display assembler and linker logs |
 | 5 | Leave the menu at the DOS prompt |
 
+Choose **3** to play the included `BUILD\ZMEI.COM` without compiling, or **1**
+to rebuild from source and play. The repository includes the tools needed
+for the Windows/DOSBox workflow; Python is needed only for the optional tests.
+
 Quitting the game returns to the launcher. From the DOS prompt, run
 `LAUNCH.BAT` to reopen it or `exit` to close DOSBox.
 The menu uses `CHOICE`, which is built into the bundled DOSBox.
+
+### Run the release on DOS
+
+Extract `UDAV-1_2.zip` into a directory on your DOS machine and run `ZMEI.COM`
+from that directory. Keep the BMP files alongside the game. The repository
+also contains a root-level `ZMEI.COM` updated for version 1.2, which can be
+run directly from the project directory in DOS or DOSBox.
 
 ## Compile and link manually
 
@@ -110,9 +133,14 @@ type BUILD\LINK.LOG
 
 The build-and-run menu option launches the game only after a successful
 build. Option **3** explicitly runs the existing executable, which may be
-from an earlier build. Generated output in `BUILD/` is ignored by Git.
-The root-level `ZMEI.COM/OBJ/MAP` and `old/` version are legacy artifacts;
-the commands above produce `BUILD\ZMEI.COM`.
+from an earlier build.
+
+`BUILD/` is tracked in this repository, including generated binaries,
+listings, logs, and smoke-test helpers. Rebuilding may therefore change
+tracked files. The root-level `ZMEI.COM`, `ZMEI.OBJ`, `ZMEI.MAP`, and `ZMEI.LST`
+are the artifacts updated for release 1.2; `BUILD.BAT` writes new output to
+`BUILD/` and does not refresh the root files or `UDAV-1_2.zip`. The `old/`
+directory and older archives preserve historical versions.
 
 ## Controls and rules
 
